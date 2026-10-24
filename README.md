@@ -10,7 +10,7 @@ My personal collection of writeups for HackTheBox machines and CTF challenges.
 ---
 
 <div align="center">
-  <img align="center" src="img/htb.webp" width="35%">
+  <img align="left" src="img/htb.webp" width="35%">
 </div>
 
 | Machine | Difficulty | OS | Topics |
