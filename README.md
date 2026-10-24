@@ -18,6 +18,5 @@ My personal collection of writeups for HackTheBox machines and CTF challenges.
 
 | Machine | Difficulty | OS | Topics |
 |---------|------------|-----|--------|
-| MakeSense | Medium | Linux | JS analysis, AES-GCM key leak, Stored XSS, WP Theme RCE, OCR abuse |
-
----
+| [MakeSense](hackthebox/makesense/writeup.md) | Medium | Linux | JS analysis, AES-GCM key leak, Stored XSS, WP Theme RCE, OCR abuse |
+| [Layover](hackthebox/layover/writeup.md) | Medium | Linux | RDP access, WiFi packet capture, Craft CMS RCE, credential reuse, CUPS LPE |
