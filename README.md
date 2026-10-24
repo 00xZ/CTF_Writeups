@@ -1,5 +1,5 @@
 <div align="center">
-  <img align="left" src="images/htb.webp" width="35%">
+  <img align="left" src="img/htb.webp" width="35%">
 </div>
 
 <br><br><br>
