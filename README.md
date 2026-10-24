@@ -1,6 +1,4 @@
-<div align="center">
-  <img align="left" src="img/htb.webp" width="35%">
-</div>
+
 
 <br><br><br>
 
@@ -14,7 +12,9 @@ My personal collection of writeups for HackTheBox machines and CTF challenges.
 
 ---
 
-## HackTheBox
+<div align="center">
+  <img align="left" src="img/htb.webp" width="35%">
+</div>
 
 | Machine | Difficulty | OS | Topics |
 |---------|------------|-----|--------|
