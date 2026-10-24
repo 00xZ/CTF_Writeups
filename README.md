@@ -1,7 +1,4 @@
 
-
-<br><br><br>
-
 # Writeups
 
 My personal collection of writeups for HackTheBox machines and CTF challenges.
